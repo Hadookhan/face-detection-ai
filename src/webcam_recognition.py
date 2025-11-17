@@ -1,71 +1,74 @@
 import cv2
-import face_recognition
 import numpy as np
-from pathlib import Path
+import os
 
-here = Path(__file__).resolve().parent
-me_path = here.parent / "test-images" / "face1.jpg"
-friend_path = here.parent / "test-images" / "face2.jpg"
+BASE_DIR = os.path.dirname(os.path.dirname(__file__))
+MODEL_PATH = os.path.join(BASE_DIR, "face_recognizer.xml")
+LABELS_PATH = os.path.join(BASE_DIR, "labels.npy")
+CASCADE_PATH = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
 
-known_face_encodings = []
-known_face_names = []
+def load_label_map(path):
+    obj = np.load(path, allow_pickle=True).item()
+    return {int(k): v for k, v in obj.items()}
 
-def add_known_face(name, filename):
-    img = face_recognition.load_image_file(filename)
-    enc = face_recognition.face_encodings(img)[0]
-    known_face_encodings.append(enc)
-    known_face_names.append(name)
+def main():
+    if not os.path.exists(MODEL_PATH) or not os.path.exists(LABELS_PATH):
+        print("[ERROR] Model or labels not found. Run train_recognizer.py first.")
+        return
 
-add_known_face("Me", me_path)
-add_known_face("Friend", friend_path)
+    face_cascade = cv2.CascadeClassifier(CASCADE_PATH)
 
-video_capture = cv2.VideoCapture(0)
+    recognizer = cv2.face.LBPHFaceRecognizer_create()
+    recognizer.read(MODEL_PATH)
 
-if not video_capture.isOpened():
-    print("Cannot open camera")
-    exit()
+    label_map = load_label_map(LABELS_PATH)
 
-while True:
-    ret, frame = video_capture.read()
-    if not ret:
-        break
+    cap = cv2.VideoCapture(0)
+    if not cap.isOpened():
+        print("[ERROR] Cannot open camera")
+        return
 
-    # Resizing the frame to increase speed
-    small_frame = cv2.resize(frame, (0,0), fx=0.25, fy=0.25)
-    rgb_small_frame = small_frame[:, :, ::-1] # Converts BGR to RGB
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            print("[ERROR] Failed to grab frame")
+            break
 
-    # Detect faces + encodings
-    face_locations = face_recognition.face_locations(rgb_small_frame)
-    face_encodings = face_recognition.face_encodings(rgb_small_frame, face_locations)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-    face_names = []
-    for face_encoding in face_encodings:
-        matches = face_recognition.compare_faces(known_face_encodings, face_encoding)
-        name = "Unkown"
+        faces = face_cascade.detectMultiScale(
+            gray,
+            scaleFactor=1.1,
+            minNeighbors=5,
+            minSize=(80, 80)
+        )
 
-        face_distances = face_recognition.face_distance(known_face_encodings, face_encoding)
-        if len(face_distances) > 0:
-            best_match_index = np.argmin(face_distances)
-            if matches[best_match_index]:
-                name = known_face_names[best_match_index]
+        for (x, y, w, h) in faces:
+            face_roi = gray[y:y + h, x:x + w]
 
-        face_names.append(name)
+            label_id, confidence = recognizer.predict(face_roi)
+            name = label_map.get(label_id, "Unknown")
 
-    # Drawing the results
-    for (top, right, bottom, left), name in zip(face_locations, face_names):
-        top *= 4
-        right *= 4
-        bottom *= 4
-        left *= 4
+            text = f"{name} ({confidence:.0f})"
 
-        cv2.rectangle(frame, (left, top), (right, bottom), (0, 255, 0), 2)
-        cv2.rectangle(frame, (left, bottom), (right, bottom + 20), (0, 255, 0), cv2.FILLED)
-        cv2.putText(frame, name, (left + 2, bottom + 15), cv2.FONT_HERSHEY_DUPLEX, 0.5, (0, 0, 0), 1)
+            cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(
+                frame,
+                text,
+                (x, y - 10),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                (0, 255, 0),
+                2
+            )
 
-    cv2.imshow("Webcam Face Recognition", frame)
+        cv2.imshow("OpenCV Face Recognition", frame)
 
-    if cv2.waitKey(1) & 0xFF == ord('q'):
-        break
+        if cv2.waitKey(1) & 0xFF == ord('q'):
+            break
 
-video_capture.release()
-cv2.destroyAllWindows()
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
